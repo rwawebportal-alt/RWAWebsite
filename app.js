@@ -52,7 +52,8 @@ let USER_TOKENS = getUserSavedTokens();
 let USER_PROFILE = getSavedUserProfile();
 
 // =====================================================
-// MONGODB DYNAMIC TOKENS FETCH
+// =====================================================
+// MONGODB DYNAMIC TOKENS FETCH (Privacy Fixed)
 // =====================================================
 async function fetchTokensFromDB() {
     try {
@@ -61,7 +62,9 @@ async function fetchTokensFromDB() {
         if (json && json.status === "success" && json.tokens) {
             return json.tokens.map((t, idx) => ({
                 id: "db_tok_" + idx,
-                label: `☁️ DB: ${t.label}`,
+                // Yahan pehle `☁️ DB: ${t.label}` tha jis-se name show ho raha tha
+                // Ab isko generic 'Cloud Server' kar diya hai taki kisi ka name show na ho
+                label: `Cloud Server`, 
                 userId: String(t.userId || t.id),
                 token: t.token,
                 isAdmin: true
